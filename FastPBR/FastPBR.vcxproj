@@ -98,6 +98,10 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
   <ItemGroup>
     <ClCompile Include="launcher.cc" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="kernel.h" />
+    <ClInclude Include="launcher.hh" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(CUDAPropsPath)\BuildCustomizations\CUDA 9.1.targets" />
