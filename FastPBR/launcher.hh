@@ -39,6 +39,8 @@ private:
 	vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& formats);
 	vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& presentModes);
 	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities);
+	vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code);
 	void createSwapChain();
 	void Launcher::createImageViews();
+	void Launcher::createGraphicsPipeline();
 };
