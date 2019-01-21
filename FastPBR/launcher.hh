@@ -30,6 +30,15 @@ private:
 	std::vector<vk::Image> _swapchainImages;
 	std::vector<vk::ImageView> _swapchainImageViews;
 	vk::SwapchainKHR _swapchain;
+	vk::PipelineLayout _pipelineLayout;
+	vk::RenderPass _renderPass;
+	vk::Pipeline _graphicsPipeline;
+	vk::PipelineCache _pipelineCache;
+	std::vector<vk::Framebuffer> _swapchainFramebuffers;
+	vk::CommandPool _commandPool;
+	std::vector<vk::CommandBuffer> _commandBuffers;
+	vk::Semaphore _imageAvailableSemaphore;
+	vk::Semaphore _renderFinishedSemaphore;
 
 	int initializeVulkan();
 	int run();
@@ -41,6 +50,12 @@ private:
 	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities);
 	vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code);
 	void createSwapChain();
-	void Launcher::createImageViews();
-	void Launcher::createGraphicsPipeline();
+	void createImageViews();
+	void createGraphicsPipeline();
+	void createRenderPass();
+	void createFramebuffers();
+	void createCommandPool();
+	void createCommandBuffers();
+	void drawFrame();
+	void createSemaphores();
 };
