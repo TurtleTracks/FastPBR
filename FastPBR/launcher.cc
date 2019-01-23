@@ -16,17 +16,17 @@ int main() {
 	return 0;
 }
 
-Launcher::Launcher(int width, int height)
-{
+Launcher::Launcher(int width, int height) {
 	_size.width = width;
 	_size.height = height;
 }
 
-void Launcher::launch()
-{
+void Launcher::launch() {
 	run();
-	//size.width = 1024;
-	//size.height = 720;
+}
+
+void Launcher::setFramebufferResize(bool resized) {
+	_framebufferResized = resized;
 }
 
 static std::vector<char> readFile(const std::string& filename) {
@@ -45,8 +45,7 @@ static std::vector<char> readFile(const std::string& filename) {
 	return buffer;
 }
 
-int Launcher::initializeVulkan()
-{
+int Launcher::initializeVulkan() {
 	vk::ApplicationInfo appInfo = {};
 	appInfo.pApplicationName = "Hello Triangle";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -114,7 +113,10 @@ int Launcher::initializeVulkan()
 	_graphicsQueue = _device.getQueue(_graphicsFamilyIndex, 0);
 	_presentQueue = _device.getQueue(_presentFamilyIndex, 0);
 
-	recreateSwapchain();
+	createSwapChain();
+	createImageViews();
+	createRenderPass();
+	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
 	createCommandBuffers();
@@ -123,16 +125,23 @@ int Launcher::initializeVulkan()
 }
 
 void Launcher::recreateSwapchain() {
+	// pause rendering while app is minimized
+	int width = 0, height = 0;
+	while (width == 0 || height == 0) {
+		glfwGetFramebufferSize(_window, &width, &height);
+		glfwWaitEvents();
+	}
+
 	_device.waitIdle();
+
+	cleanupSwapchain();
 
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
 	createGraphicsPipeline();
-}
-
-void Launcher::cleanupSwapchain() {
-
+	createFramebuffers();
+	createCommandBuffers();
 }
 
 vk::PhysicalDevice Launcher::pickPhysicalDevice(std::vector<vk::PhysicalDevice> physicalDevices) {
@@ -221,7 +230,12 @@ vk::PresentModeKHR Launcher::chooseSwapPresentMode(const std::vector<vk::Present
 
 vk::Extent2D Launcher::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities) {
 	// I'm not going to worry returning anything other than the expected resolution
-	return { _size.width, _size.height };
+	if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+		return capabilities.currentExtent;
+	}
+	else {
+		return { _size.width, _size.height };
+	}
 }
 
 void Launcher::createSwapChain() {
@@ -248,7 +262,7 @@ void Launcher::createSwapChain() {
 	swapchainCreateInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
 	swapchainCreateInfo.presentMode = presentMode;
 	swapchainCreateInfo.clipped = VK_TRUE;
-	swapchainCreateInfo.setOldSwapchain(nullptr);
+	swapchainCreateInfo.setOldSwapchain(_swapchain);
 
 	if (_graphicsFamilyIndex != _presentFamilyIndex) {
 		swapchainCreateInfo.imageSharingMode = vk::SharingMode::eConcurrent;
@@ -532,10 +546,14 @@ void Launcher::createSyncObjects() {
 
 void Launcher::drawFrame() {
 	_device.waitForFences(1, &_inFlightFences[_currentFrame], true, std::numeric_limits<uint64_t>::max());
-	_device.resetFences(1, &_inFlightFences[_currentFrame]);
 	auto imageIndex = _device.acquireNextImageKHR(_swapchain,
 		std::numeric_limits<uint64_t>::max(),
 		_imageAvailableSemaphore[_currentFrame], nullptr);
+
+	if (imageIndex.result == vk::Result::eErrorOutOfDateKHR) {
+		recreateSwapchain();
+		return;
+	} 
 
 	vk::SubmitInfo submitInfo;
 
@@ -552,6 +570,8 @@ void Launcher::drawFrame() {
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
 
+	_device.resetFences(1, &_inFlightFences[_currentFrame]);
+
 	_graphicsQueue.submit(1, &submitInfo, _inFlightFences[_currentFrame]);
 
 	// Presentation stage
@@ -565,10 +585,22 @@ void Launcher::drawFrame() {
 	presentInfo.pSwapchains = swapchains;
 	presentInfo.pImageIndices = &(imageIndex.value);
 	
-	_presentQueue.presentKHR(presentInfo);
+	auto presentQueueResult =_presentQueue.presentKHR(presentInfo);
+
+	if (presentQueueResult == vk::Result::eErrorOutOfDateKHR
+		|| presentQueueResult == vk::Result::eSuboptimalKHR
+		|| _framebufferResized) {
+		recreateSwapchain();
+		_framebufferResized = false;
+	}
 
 	// wait for work to finish
 	_currentFrame = (++_currentFrame) % kMaxFramesInFlight;
+}
+
+static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+	auto app = reinterpret_cast<Launcher*>(glfwGetWindowUserPointer(window));
+	app->setFramebufferResize(true);
 }
 
 int Launcher::run()
@@ -588,6 +620,7 @@ int Launcher::run()
 	}
 	glfwSetWindowUserPointer(_window, (void*)this);
 	glfwMakeContextCurrent(_window);
+	glfwSetFramebufferSizeCallback(_window, framebufferResizeCallback);
 	//glfwSetKeyCallback(window, key_callback);
 	//glfwSetMouseButtonCallback(window, mouse_callback);
 
@@ -598,29 +631,16 @@ int Launcher::run()
 	{
 		glfwPollEvents();
 		drawFrame();
-		//updateSystem(window);
-		//renderScene();
-		//glfwSwapBuffers(window);
 	}
 	_device.waitIdle();
 
-	// destroy created objects
-	for (auto framebuffer : _swapchainFramebuffers) {
-		_device.destroyFramebuffer(framebuffer);
-	}
-	for (auto imageView : _swapchainImageViews) {
-		_device.destroyImageView(imageView);
-	}
+	cleanupSwapchain();
 	for (int i = 0; i < kMaxFramesInFlight; ++i) {
 		_device.destroySemaphore(_imageAvailableSemaphore[i]);
 		_device.destroySemaphore(_renderFinishedSemaphore[i]);
 		_device.destroyFence(_inFlightFences[i]);
 	}
 	_device.destroyCommandPool(_commandPool);
-	_device.destroyPipeline(_graphicsPipeline);
-	_device.destroyPipelineLayout(_pipelineLayout);
-	_device.destroyRenderPass(_renderPass);
-	_device.destroySwapchainKHR(_swapchain);
 	_device.destroy();
 	_instance.destroySurfaceKHR(_surface);
 	_instance.destroy();
@@ -628,4 +648,18 @@ int Launcher::run()
 
 	glfwTerminate();
 	return 0;
+}
+
+void Launcher::cleanupSwapchain() {
+	// destroy created objects
+	for (auto framebuffer : _swapchainFramebuffers) {
+		_device.destroyFramebuffer(framebuffer);
+	}
+	for (auto imageView : _swapchainImageViews) {
+		_device.destroyImageView(imageView);
+	}
+	_device.destroyPipeline(_graphicsPipeline);
+	_device.destroyPipelineLayout(_pipelineLayout);
+	_device.destroyRenderPass(_renderPass);
+	_device.destroySwapchainKHR(_swapchain);
 }

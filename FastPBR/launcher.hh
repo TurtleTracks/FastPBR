@@ -6,6 +6,7 @@ public:
 	Launcher(int width, int height);
 	//~Launcher();
 	void launch();
+	void setFramebufferResize(bool resized);
 
 private:
 	struct SwapChainSupportDetails {
@@ -17,6 +18,7 @@ private:
 	static const int kMaxFramesInFlight = 2;
 
 	size_t _currentFrame = 0;
+	bool _framebufferResized = false;
 	GLFWwindow *_window;
 	vk::Extent2D _size{ 1280, 720 };
 	vk::Extent2D _swapchainExtent;
