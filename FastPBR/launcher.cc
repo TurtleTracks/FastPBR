@@ -114,15 +114,25 @@ int Launcher::initializeVulkan()
 	_graphicsQueue = _device.getQueue(_graphicsFamilyIndex, 0);
 	_presentQueue = _device.getQueue(_presentFamilyIndex, 0);
 
+	recreateSwapchain();
+	createFramebuffers();
+	createCommandPool();
+	createCommandBuffers();
+	createSyncObjects();
+	return 0;
+}
+
+void Launcher::recreateSwapchain() {
+	_device.waitIdle();
+
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
 	createGraphicsPipeline();
-	createFramebuffers();
-	createCommandPool();
-	createCommandBuffers();
-	createSemaphores();
-	return 0;
+}
+
+void Launcher::cleanupSwapchain() {
+
 }
 
 vk::PhysicalDevice Launcher::pickPhysicalDevice(std::vector<vk::PhysicalDevice> physicalDevices) {
@@ -509,20 +519,27 @@ vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code) {
 	return _device.createShaderModule(createInfo);
 }
 
-void Launcher::createSemaphores() {
+void Launcher::createSyncObjects() {
 	vk::SemaphoreCreateInfo semaphoreCreateInfo;
-	_imageAvailableSemaphore = _device.createSemaphore(semaphoreCreateInfo);
-	_renderFinishedSemaphore = _device.createSemaphore(semaphoreCreateInfo);
+	vk::FenceCreateInfo fenceCreateInfo;
+	fenceCreateInfo.flags = vk::FenceCreateFlagBits::eSignaled;
+	for (size_t i = 0; i < kMaxFramesInFlight; ++i) {
+		_imageAvailableSemaphore.push_back(_device.createSemaphore(semaphoreCreateInfo));
+		_renderFinishedSemaphore.push_back(_device.createSemaphore(semaphoreCreateInfo));
+		_inFlightFences.push_back(_device.createFence(fenceCreateInfo));
+	}
 }
 
 void Launcher::drawFrame() {
+	_device.waitForFences(1, &_inFlightFences[_currentFrame], true, std::numeric_limits<uint64_t>::max());
+	_device.resetFences(1, &_inFlightFences[_currentFrame]);
 	auto imageIndex = _device.acquireNextImageKHR(_swapchain,
 		std::numeric_limits<uint64_t>::max(),
-		_imageAvailableSemaphore, nullptr);
+		_imageAvailableSemaphore[_currentFrame], nullptr);
 
 	vk::SubmitInfo submitInfo;
 
-	vk::Semaphore waitSemaphores[] = { _imageAvailableSemaphore };
+	vk::Semaphore waitSemaphores[] = { _imageAvailableSemaphore[_currentFrame] };
 	vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
 
 	submitInfo.waitSemaphoreCount = 1;
@@ -531,11 +548,11 @@ void Launcher::drawFrame() {
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &_commandBuffers[imageIndex.value];
 
-	vk::Semaphore signalSemaphores[] = { _renderFinishedSemaphore };
+	vk::Semaphore signalSemaphores[] = { _renderFinishedSemaphore[_currentFrame] };
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
 
-	_graphicsQueue.submit(1, &submitInfo, nullptr);
+	_graphicsQueue.submit(1, &submitInfo, _inFlightFences[_currentFrame]);
 
 	// Presentation stage
 	vk::PresentInfoKHR presentInfo;
@@ -549,6 +566,9 @@ void Launcher::drawFrame() {
 	presentInfo.pImageIndices = &(imageIndex.value);
 	
 	_presentQueue.presentKHR(presentInfo);
+
+	// wait for work to finish
+	_currentFrame = (++_currentFrame) % kMaxFramesInFlight;
 }
 
 int Launcher::run()
@@ -582,21 +602,25 @@ int Launcher::run()
 		//renderScene();
 		//glfwSwapBuffers(window);
 	}
-	//vkDestroyInstance(_instance, nullptr);
+	_device.waitIdle();
+
+	// destroy created objects
 	for (auto framebuffer : _swapchainFramebuffers) {
 		_device.destroyFramebuffer(framebuffer);
 	}
 	for (auto imageView : _swapchainImageViews) {
 		_device.destroyImageView(imageView);
 	}
-	_device.destroySwapchainKHR(_swapchain);
-	_device.destroyPipelineLayout(_pipelineLayout);
-	_device.destroyRenderPass(_renderPass);
+	for (int i = 0; i < kMaxFramesInFlight; ++i) {
+		_device.destroySemaphore(_imageAvailableSemaphore[i]);
+		_device.destroySemaphore(_renderFinishedSemaphore[i]);
+		_device.destroyFence(_inFlightFences[i]);
+	}
 	_device.destroyCommandPool(_commandPool);
-	_device.destroySemaphore(_imageAvailableSemaphore);
-	_device.destroySemaphore(_renderFinishedSemaphore);
 	_device.destroyPipeline(_graphicsPipeline);
 	_device.destroyPipelineLayout(_pipelineLayout);
+	_device.destroyRenderPass(_renderPass);
+	_device.destroySwapchainKHR(_swapchain);
 	_device.destroy();
 	_instance.destroySurfaceKHR(_surface);
 	_instance.destroy();

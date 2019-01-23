@@ -14,6 +14,9 @@ private:
 		std::vector<vk::PresentModeKHR> presentModes;
 	};
 
+	static const int kMaxFramesInFlight = 2;
+
+	size_t _currentFrame = 0;
 	GLFWwindow *_window;
 	vk::Extent2D _size{ 1280, 720 };
 	vk::Extent2D _swapchainExtent;
@@ -37,10 +40,13 @@ private:
 	std::vector<vk::Framebuffer> _swapchainFramebuffers;
 	vk::CommandPool _commandPool;
 	std::vector<vk::CommandBuffer> _commandBuffers;
-	vk::Semaphore _imageAvailableSemaphore;
-	vk::Semaphore _renderFinishedSemaphore;
+	std::vector<vk::Semaphore> _imageAvailableSemaphore;
+	std::vector<vk::Semaphore> _renderFinishedSemaphore;
+	std::vector<vk::Fence> _inFlightFences;
 
 	int initializeVulkan();
+	void recreateSwapchain();
+	void cleanupSwapchain();
 	int run();
 	vk::PhysicalDevice pickPhysicalDevice(std::vector<vk::PhysicalDevice> physicalDevices);
 	bool deviceSupportsExtensions(vk::PhysicalDevice physicalDevice);
@@ -57,5 +63,5 @@ private:
 	void createCommandPool();
 	void createCommandBuffers();
 	void drawFrame();
-	void createSemaphores();
+	void createSyncObjects();
 };
