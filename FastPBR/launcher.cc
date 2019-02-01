@@ -1,14 +1,7 @@
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <vulkan/vulkan.hpp>
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include <fstream>
-#include <glm/vec4.hpp>
-#include <glm/mat4x4.hpp>
-#include <iostream>
-#include "kernel.h"
 #include "launcher.hh"
+#include "kernel.h"
+#include <fstream>
+#include <iostream>
 
 int main() {
 	Launcher app = Launcher(1280, 720);
@@ -103,8 +96,8 @@ int Launcher::initializeVulkan() {
 	deviceCreateInfo.pQueueCreateInfos = queueCreateInfo.data();
 	deviceCreateInfo.queueCreateInfoCount = 2;
 	deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
-	deviceCreateInfo.enabledExtensionCount = deviceExtensions.size();
-	deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
+	deviceCreateInfo.enabledExtensionCount = _deviceExtensions.size();
+	deviceCreateInfo.ppEnabledExtensionNames = _deviceExtensions.data();
 
 	// alternatively, something about validation layer data
 	deviceCreateInfo.enabledLayerCount = 0;
@@ -119,6 +112,7 @@ int Launcher::initializeVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
+	createVertexBuffer();
 	createCommandBuffers();
 	createSyncObjects();
 	return 0;
@@ -175,25 +169,28 @@ vk::PhysicalDevice Launcher::pickPhysicalDevice(std::vector<vk::PhysicalDevice> 
 			}
 		}
 	}
-	return nullptr;
+	throw std::runtime_error("No suitable device found!");
 }
 
 bool Launcher::deviceSupportsExtensions(vk::PhysicalDevice physicalDevice) {
 	uint32_t extensionCount; 
-	auto extensionProperties = physicalDevice.enumerateDeviceExtensionProperties();
+	auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 	
-	int32_t numExtensions = deviceExtensions.size();
-	for (const auto& extension : extensionProperties) {
-		for (const auto&  needed : deviceExtensions) {
-			if (extension.extensionName == needed) {
-				numExtensions--;
+	auto missingExtensions = std::vector<std::string>(_deviceExtensions.begin(), _deviceExtensions.end());
+
+	for (const auto& extension : availableExtensions) {
+		for (int i = 0; i < missingExtensions.size(); ++i) {
+			if (std::string(extension.extensionName) == missingExtensions[i]) {
+				missingExtensions.erase(missingExtensions.begin() + i);
+				break;
 			}
 		}
 	}
-	if (numExtensions == 0) {
-		auto swapChainSupport = querySwapChainSupport(physicalDevice);
-		return !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
-	}
+
+	auto swapChainSupport = querySwapChainSupport(physicalDevice);
+	return missingExtensions.empty()
+		&& !swapChainSupport.formats.empty() 
+		&& !swapChainSupport.presentModes.empty();
 }
 
 Launcher::SwapChainSupportDetails Launcher::querySwapChainSupport(vk::PhysicalDevice physicalDevice) {
@@ -319,12 +316,16 @@ void Launcher::createGraphicsPipeline() {
 
 	vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+	// binding and attrbiute
+	auto bindingDescription = Vertex::getBindingDescription();
+	auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
 	// pVertex[xxx]Descriptions refer to array of structs
 	vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-	vertexInputInfo.setVertexBindingDescriptionCount(0);
-	vertexInputInfo.setPVertexAttributeDescriptions(nullptr);
-	vertexInputInfo.setVertexAttributeDescriptionCount(0);
-	vertexInputInfo.setPVertexAttributeDescriptions(nullptr);
+	vertexInputInfo.vertexBindingDescriptionCount = 1;
+	vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+	vertexInputInfo.vertexAttributeDescriptionCount = attributeDescriptions.size();
+	vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 	vk::PipelineInputAssemblyStateCreateInfo inputAssembly; 
 	inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -356,7 +357,7 @@ void Launcher::createGraphicsPipeline() {
 	rasterizer.polygonMode = vk::PolygonMode::eFill;
 	rasterizer.lineWidth = 1.0f;
 	rasterizer.cullMode = vk::CullModeFlagBits::eBack;
-	rasterizer.frontFace = vk::FrontFace::eClockwise;
+	rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
 	rasterizer.depthBiasEnable = false;
 
 	// multisampling 
@@ -474,7 +475,7 @@ void Launcher::createFramebuffers() {
 		framebufferInfo.height = _swapchainExtent.height;
 		framebufferInfo.layers = 1;
 
-		_swapchainFramebuffers[i] = _device.createFramebuffer(framebufferInfo, nullptr);
+		_swapchainFramebuffers[i] = _device.createFramebuffer(framebufferInfo);
 	}
 }
 
@@ -498,7 +499,7 @@ void Launcher::createCommandBuffers() {
 	for (size_t i = 0; i < _commandBuffers.size(); ++i) {
 		vk::CommandBufferBeginInfo commandBufferBeginInfo;
 		commandBufferBeginInfo.flags = vk::CommandBufferUsageFlagBits::eSimultaneousUse;
-		
+
 		_commandBuffers[i].begin(commandBufferBeginInfo);
 
 		vk::RenderPassBeginInfo renderPassBeginInfo;
@@ -515,13 +516,18 @@ void Launcher::createCommandBuffers() {
 		_commandBuffers[i].beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
 		_commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, _graphicsPipeline);
-		_commandBuffers[i].draw(3, 1, 0, 0);
+
+		std::vector<vk::Buffer> vertexBuffers = { _vertexBuffer };
+		std::vector<vk::DeviceSize> offsets = { 0 };
+		_commandBuffers[i].bindVertexBuffers(0, vertexBuffers, offsets);
+
+		// 3 == vertices.size() 
+		_commandBuffers[i].draw(_vertices.size(), 1, 0, 0);
 
 		_commandBuffers[i].endRenderPass();
 		_commandBuffers[i].end();
-	}
 
-	
+	}
 }
 
 vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code) {
@@ -542,6 +548,52 @@ void Launcher::createSyncObjects() {
 		_renderFinishedSemaphore.push_back(_device.createSemaphore(semaphoreCreateInfo));
 		_inFlightFences.push_back(_device.createFence(fenceCreateInfo));
 	}
+}
+
+void Launcher::createVertexBuffer() {
+	_vertices = 
+		{ { { 0.0f, -0.5f, 0 },{ 1.0f, 0.0f, 0.0f } },
+	{ { 0.5f, 0.5f, 0 },{ 0.0f, 1.0f, 0.0f } },
+	{ { -0.5f, 0.5f, 0 },{ 0.0f, 0.0f, 1.0f } }
+	};
+
+	vk::BufferCreateInfo bufferInfo;
+	bufferInfo.size = sizeof(_vertices[0]) * _vertices.size(); // TODO : scale buffer size to need
+	bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer;
+	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+	_vertexBuffer = _device.createBuffer(bufferInfo);
+
+	vk::MemoryRequirements memoryRequirements;
+	memoryRequirements = _device.getBufferMemoryRequirements(_vertexBuffer);
+
+	vk::MemoryAllocateInfo memoryAllocateInfo;
+	memoryAllocateInfo.allocationSize = memoryRequirements.size;
+	memoryAllocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
+		vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+	_vertexBufferMemory = _device.allocateMemory(memoryAllocateInfo);
+	_device.bindBufferMemory(_vertexBuffer, _vertexBufferMemory, 0);
+
+	// filling vertex buffer
+	void* data;
+	data = _device.mapMemory(_vertexBufferMemory, 0, bufferInfo.size, {});
+	memcpy(data, _vertices.data(), (size_t)bufferInfo.size);
+	_device.unmapMemory(_vertexBufferMemory);
+}
+
+uint32_t Launcher::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+	vk::PhysicalDeviceMemoryProperties memoryProperties; 
+	memoryProperties = _gpu.getMemoryProperties();
+	
+	for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i) {
+		bool isTypeMatch = typeFilter & (1 << i);
+		bool hasProperties = (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties;
+		if (isTypeMatch && hasProperties) {
+			return i;
+		}
+	}
+	throw std::runtime_error("failed to find suitable memory type");
 }
 
 void Launcher::drawFrame() {
@@ -640,7 +692,10 @@ int Launcher::run()
 		_device.destroySemaphore(_renderFinishedSemaphore[i]);
 		_device.destroyFence(_inFlightFences[i]);
 	}
+	_device.destroyBuffer(_vertexBuffer);
+	_device.freeMemory(_vertexBufferMemory);
 	_device.destroyCommandPool(_commandPool);
+	_device.destroyBuffer(_vertexBuffer);
 	_device.destroy();
 	_instance.destroySurfaceKHR(_surface);
 	_instance.destroy();

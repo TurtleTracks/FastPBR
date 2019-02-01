@@ -96,9 +96,11 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="geometry.cc" />
     <ClCompile Include="launcher.cc" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="geometry.hh" />
     <ClInclude Include="kernel.h" />
     <ClInclude Include="launcher.hh" />
   </ItemGroup>
