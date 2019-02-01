@@ -1,4 +1,10 @@
 #pragma once
+#include "geometry.hh"
+#include <vulkan/vulkan.hpp>
+#include <GLFW/glfw3.h>
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+
 class Launcher
 {
 public:
@@ -31,7 +37,7 @@ private:
 	vk::Queue _graphicsQueue;
 	vk::Queue _presentQueue;
 	vk::SurfaceKHR _surface;
-	std::vector<const char*> deviceExtensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+	std::vector<const char *> _deviceExtensions{ "VK_KHR_swapchain" };
 	std::vector<vk::Image> _swapchainImages;
 	std::vector<vk::ImageView> _swapchainImageViews;
 	vk::SwapchainKHR _swapchain;
@@ -45,6 +51,9 @@ private:
 	std::vector<vk::Semaphore> _imageAvailableSemaphore;
 	std::vector<vk::Semaphore> _renderFinishedSemaphore;
 	std::vector<vk::Fence> _inFlightFences;
+	std::vector<Vertex> _vertices;
+	vk::Buffer _vertexBuffer;
+	vk::DeviceMemory _vertexBufferMemory;
 
 	int initializeVulkan();
 	void recreateSwapchain();
@@ -66,4 +75,6 @@ private:
 	void createCommandBuffers();
 	void drawFrame();
 	void createSyncObjects();
+	void createVertexBuffer();
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 };
