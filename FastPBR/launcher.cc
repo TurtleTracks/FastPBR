@@ -695,7 +695,6 @@ int Launcher::run()
 	_device.destroyBuffer(_vertexBuffer);
 	_device.freeMemory(_vertexBufferMemory);
 	_device.destroyCommandPool(_commandPool);
-	_device.destroyBuffer(_vertexBuffer);
 	_device.destroy();
 	_instance.destroySurfaceKHR(_surface);
 	_instance.destroy();
