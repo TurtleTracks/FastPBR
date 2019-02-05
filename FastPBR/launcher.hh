@@ -54,6 +54,9 @@ private:
 	std::vector<Vertex> _vertices;
 	vk::Buffer _vertexBuffer;
 	vk::DeviceMemory _vertexBufferMemory;
+	std::vector<uint16_t> _indices;
+	vk::Buffer _indexBuffer;
+	vk::DeviceMemory _indexBufferMemory;
 
 	int initializeVulkan();
 	void recreateSwapchain();
@@ -75,6 +78,10 @@ private:
 	void createCommandBuffers();
 	void drawFrame();
 	void createSyncObjects();
+	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
+		vk::Buffer& buffer, vk::DeviceMemory& deviceMemory);
+	void copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size);
 	void createVertexBuffer();
+	void createIndexBuffer();
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 };

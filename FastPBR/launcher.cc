@@ -113,6 +113,7 @@ int Launcher::initializeVulkan() {
 	createFramebuffers();
 	createCommandPool();
 	createVertexBuffer();
+	createIndexBuffer();
 	createCommandBuffers();
 	createSyncObjects();
 	return 0;
@@ -521,8 +522,9 @@ void Launcher::createCommandBuffers() {
 		std::vector<vk::DeviceSize> offsets = { 0 };
 		_commandBuffers[i].bindVertexBuffers(0, vertexBuffers, offsets);
 
-		// 3 == vertices.size() 
-		_commandBuffers[i].draw(_vertices.size(), 1, 0, 0);
+		_commandBuffers[i].bindIndexBuffer(_indexBuffer, 0, vk::IndexType::eUint16);
+
+		_commandBuffers[i].drawIndexed(_indices.size(), 1, 0, 0, 0);
 
 		_commandBuffers[i].endRenderPass();
 		_commandBuffers[i].end();
@@ -550,36 +552,112 @@ void Launcher::createSyncObjects() {
 	}
 }
 
-void Launcher::createVertexBuffer() {
-	_vertices = 
-		{ { { 0.0f, -0.5f, 0 },{ 1.0f, 0.0f, 0.0f } },
-	{ { 0.5f, 0.5f, 0 },{ 0.0f, 1.0f, 0.0f } },
-	{ { -0.5f, 0.5f, 0 },{ 0.0f, 0.0f, 1.0f } }
-	};
-
+void Launcher::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
+	vk::Buffer& buffer, vk::DeviceMemory& deviceMemory) {
 	vk::BufferCreateInfo bufferInfo;
-	bufferInfo.size = sizeof(_vertices[0]) * _vertices.size(); // TODO : scale buffer size to need
-	bufferInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer;
+	bufferInfo.size = size;
+	bufferInfo.usage = usage;
 	bufferInfo.sharingMode = vk::SharingMode::eExclusive;
 
-	_vertexBuffer = _device.createBuffer(bufferInfo);
+	buffer = _device.createBuffer(bufferInfo);
 
 	vk::MemoryRequirements memoryRequirements;
-	memoryRequirements = _device.getBufferMemoryRequirements(_vertexBuffer);
+	memoryRequirements = _device.getBufferMemoryRequirements(buffer);
 
 	vk::MemoryAllocateInfo memoryAllocateInfo;
 	memoryAllocateInfo.allocationSize = memoryRequirements.size;
-	memoryAllocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
-		vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+	memoryAllocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
 
-	_vertexBufferMemory = _device.allocateMemory(memoryAllocateInfo);
-	_device.bindBufferMemory(_vertexBuffer, _vertexBufferMemory, 0);
+	deviceMemory = _device.allocateMemory(memoryAllocateInfo);
+	_device.bindBufferMemory(buffer, deviceMemory, 0);
+}
+
+void Launcher::copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
+	vk::CommandBufferAllocateInfo bufferAllocateInfo;
+	bufferAllocateInfo.level = vk::CommandBufferLevel::ePrimary;
+	bufferAllocateInfo.commandPool = _commandPool;
+	bufferAllocateInfo.commandBufferCount = 1;
+
+	vk::CommandBuffer commandBuffer;
+	commandBuffer = _device.allocateCommandBuffers(bufferAllocateInfo)[0];
+
+	vk::CommandBufferBeginInfo bufferBeginInfo;
+	bufferBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+	commandBuffer.begin(bufferBeginInfo);
+
+	vk::BufferCopy copyRegion;
+	copyRegion.size = size;
+	commandBuffer.copyBuffer(srcBuffer, dstBuffer, copyRegion);
+
+	commandBuffer.end();
+
+	vk::SubmitInfo submitInfo;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffer;
+
+	_graphicsQueue.submit(submitInfo, nullptr);
+	_graphicsQueue.waitIdle();
+	_device.freeCommandBuffers(_commandPool, commandBuffer);
+}
+
+void Launcher::createVertexBuffer() {
+	_vertices = 
+	{ 
+		{ {-0.5f, -0.5f, 0 }, { 1.0, 0.0f, 0.0f } },
+		{ { 0.5f, -0.5f, 0 }, { 1.0f, 1.0f, 0.0f } },
+		{ { 0.5f, 0.5f, 0 }, { 0.0f, 0.0f, 1.0f } },
+		{ { -0.5f, 0.5f, 0 }, { 1.0f, 1.0f, 1.0f } }
+	};
+	vk::DeviceSize bufferSize = sizeof(_vertices[0]) * _vertices.size();
+	auto properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+
+	vk::Buffer stagingBuffer;
+	vk::DeviceMemory stagingBufferMemory;
+	createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, properties,
+		stagingBuffer, stagingBufferMemory);
 
 	// filling vertex buffer
 	void* data;
-	data = _device.mapMemory(_vertexBufferMemory, 0, bufferInfo.size, {});
-	memcpy(data, _vertices.data(), (size_t)bufferInfo.size);
-	_device.unmapMemory(_vertexBufferMemory);
+	data = _device.mapMemory(stagingBufferMemory, 0, bufferSize, {});
+	memcpy(data, _vertices.data(), (size_t)bufferSize);
+	_device.unmapMemory(stagingBufferMemory);
+
+	auto usageFlags = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+	properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+	createBuffer(bufferSize, usageFlags, properties,
+		_vertexBuffer, _vertexBufferMemory);
+	copyBuffer(stagingBuffer, _vertexBuffer, bufferSize);
+
+	_device.destroyBuffer(stagingBuffer);
+	_device.freeMemory(stagingBufferMemory);
+	
+}
+
+void Launcher::createIndexBuffer() {
+	_indices = { 0, 1, 2, 2, 3, 0 };
+	vk::DeviceSize bufferSize = sizeof(_indices[0]) * _indices.size();
+
+	auto properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+
+	vk::Buffer stagingBuffer;
+	vk::DeviceMemory stagingBufferMemory;
+	createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, properties,
+		stagingBuffer, stagingBufferMemory);
+
+	// filling index buffer
+	void* data;
+	data = _device.mapMemory(stagingBufferMemory, 0, bufferSize, {});
+	memcpy(data, _indices.data(), (size_t)bufferSize);
+	_device.unmapMemory(stagingBufferMemory);
+
+	auto usageFlags = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+	properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+	createBuffer(bufferSize, usageFlags, properties,
+		_indexBuffer, _indexBufferMemory);
+	copyBuffer(stagingBuffer, _indexBuffer, bufferSize);
+
+	_device.destroyBuffer(stagingBuffer);
+	_device.freeMemory(stagingBufferMemory);
 }
 
 uint32_t Launcher::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
@@ -694,6 +772,8 @@ int Launcher::run()
 	}
 	_device.destroyBuffer(_vertexBuffer);
 	_device.freeMemory(_vertexBufferMemory);
+	_device.destroyBuffer(_indexBuffer);
+	_device.freeMemory(_indexBufferMemory);
 	_device.destroyCommandPool(_commandPool);
 	_device.destroy();
 	_instance.destroySurfaceKHR(_surface);
