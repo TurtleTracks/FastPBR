@@ -1,5 +1,6 @@
 #include "launcher.hh"
 #include "kernel.h"
+#include <chrono>
 #include <fstream>
 #include <iostream>
 
@@ -109,11 +110,15 @@ int Launcher::initializeVulkan() {
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
+	createDescriptorSetLayout();
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
 	createVertexBuffer();
 	createIndexBuffer();
+	createUniformBuffers();
+	createDescriptorPool();
+	createDescriptorSets();
 	createCommandBuffers();
 	createSyncObjects();
 	return 0;
@@ -298,6 +303,61 @@ void Launcher::createImageViews() {
 	}
 }
 
+void Launcher::createDescriptorSetLayout() {
+	vk::DescriptorSetLayoutBinding uboLayoutBinding;
+	uboLayoutBinding.binding = 0;
+	uboLayoutBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
+	uboLayoutBinding.descriptorCount = 1;
+	uboLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+
+	vk::PipelineLayout pipelineLayout; 
+
+	vk::DescriptorSetLayoutCreateInfo layoutCreateInfo;
+	layoutCreateInfo.bindingCount = 1;
+	layoutCreateInfo.pBindings = &uboLayoutBinding;
+
+	_descriptorSetLayout = _device.createDescriptorSetLayout(layoutCreateInfo);
+}
+
+void Launcher::createDescriptorSets() {
+	std::vector<vk::DescriptorSetLayout> layouts(_swapchainImages.size(), _descriptorSetLayout);
+
+	vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo; 
+	descriptorSetAllocateInfo.descriptorPool = _descriptorPool;
+	descriptorSetAllocateInfo.descriptorSetCount = _swapchainImages.size();
+	descriptorSetAllocateInfo.pSetLayouts = layouts.data();
+
+	_descriptorSets = _device.allocateDescriptorSets(descriptorSetAllocateInfo);
+
+	for (size_t i = 0; i < _swapchainImages.size(); ++i) {
+		vk::DescriptorBufferInfo bufferInfo = {};
+		bufferInfo.buffer = _uniformBuffers[i]; 
+		bufferInfo.offset = 0; 
+		bufferInfo.range = sizeof(UniformBufferObject);
+
+		vk::WriteDescriptorSet descriptorWrite = {};
+		descriptorWrite.dstSet = _descriptorSets[i];
+		descriptorWrite.dstBinding = 0;
+		descriptorWrite.dstArrayElement = 0;
+		descriptorWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+		descriptorWrite.descriptorCount = 1;
+		descriptorWrite.pBufferInfo = &bufferInfo;
+		_device.updateDescriptorSets(descriptorWrite, nullptr);
+	}
+}
+
+void Launcher::createDescriptorPool() {
+	vk::DescriptorPoolSize poolSize;
+	poolSize.descriptorCount = _swapchainImages.size();
+
+	vk::DescriptorPoolCreateInfo poolCreateInfo;
+	poolCreateInfo.poolSizeCount = 1;
+	poolCreateInfo.pPoolSizes = &poolSize;
+	poolCreateInfo.maxSets = _swapchainImages.size();
+
+	_descriptorPool = _device.createDescriptorPool(poolCreateInfo);
+}
+
 void Launcher::createGraphicsPipeline() {
 	auto vertShaderCode = readFile("shaders/vert.spv");
 	auto fragShaderCode = readFile("shaders/frag.spv");
@@ -390,8 +450,10 @@ void Launcher::createGraphicsPipeline() {
 	colorBlending.pAttachments = &colorBlendAttachment;
 
 	// pipeline layout
-	vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo; 
-	_device.createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &_pipelineLayout);
+	vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
+	pipelineLayoutCreateInfo.setLayoutCount = 1;
+	pipelineLayoutCreateInfo.pSetLayouts = &_descriptorSetLayout;
+	_pipelineLayout = _device.createPipelineLayout(pipelineLayoutCreateInfo);
 
 	// create graphics pipeline
 	vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo;
@@ -414,8 +476,7 @@ void Launcher::createGraphicsPipeline() {
 	
 	vk::PipelineCacheCreateInfo pipelineCacheCreateInfo;
 	_pipelineCache = _device.createPipelineCache(pipelineCacheCreateInfo);
-	_device.createGraphicsPipelines(_pipelineCache, 1, &graphicsPipelineCreateInfo,
-									nullptr, &_graphicsPipeline);
+	_graphicsPipeline = _device.createGraphicsPipelines(_pipelineCache, graphicsPipelineCreateInfo)[0];
 	// cleanup
 	_device.destroyShaderModule(vertShaderModule);
 	_device.destroyShaderModule(fragShaderModule);
@@ -523,7 +584,8 @@ void Launcher::createCommandBuffers() {
 		_commandBuffers[i].bindVertexBuffers(0, vertexBuffers, offsets);
 
 		_commandBuffers[i].bindIndexBuffer(_indexBuffer, 0, vk::IndexType::eUint16);
-
+		_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, _pipelineLayout, 0, _descriptorSets[i],
+			nullptr);
 		_commandBuffers[i].drawIndexed(_indices.size(), 1, 0, 0, 0);
 
 		_commandBuffers[i].endRenderPass();
@@ -660,6 +722,41 @@ void Launcher::createIndexBuffer() {
 	_device.freeMemory(stagingBufferMemory);
 }
 
+void Launcher::createUniformBuffers() {
+	vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+
+	_uniformBuffers.resize(_swapchainImages.size());
+	_uniformBufferMemories.resize(_swapchainImages.size());
+
+	for (size_t i = 0; i < _uniformBuffers.size(); ++i) {
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible
+			| vk::MemoryPropertyFlagBits::eHostCoherent, _uniformBuffers[i], _uniformBufferMemories[i]);
+	}
+	
+}
+
+void Launcher::updateUniformBuffer(uint32_t currentImage) {
+	// push constants may be a more optimal way to pass small buffers of data to shaders
+	static auto startTime = std::chrono::high_resolution_clock::now();
+
+	auto currentTime = std::chrono::high_resolution_clock::now(); 
+	float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+	UniformBufferObject ubo = {};
+	ubo.invert = glm::mat4(	1.0f, 0.0f, 0.0f, 0.0f,
+							0.0f, -1.0f, 0.0f, 0.0f,
+							0.0f, 0.0f, 0.5f, 0.0f,
+							0.0f, 0.0f, 0.5f, 1.0f);
+	ubo.model = glm::rotate(glm::mat4(1.0f), time  * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	ubo.view = glm::lookAt(glm::vec3(0, 0, -2), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+	ubo.proj = glm::perspective(glm::radians(45.0f), _swapchainExtent.width / (float)_swapchainExtent.height, 0.1f, 10.0f);
+
+	void* data;
+	data = _device.mapMemory(_uniformBufferMemories[currentImage], 0, sizeof(ubo), {});
+	memcpy(data, &ubo, sizeof(ubo));
+	_device.unmapMemory(_uniformBufferMemories[currentImage]);
+}
+
 uint32_t Launcher::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
 	vk::PhysicalDeviceMemoryProperties memoryProperties; 
 	memoryProperties = _gpu.getMemoryProperties();
@@ -684,6 +781,8 @@ void Launcher::drawFrame() {
 		recreateSwapchain();
 		return;
 	} 
+
+	updateUniformBuffer(imageIndex.value);
 
 	vk::SubmitInfo submitInfo;
 
@@ -770,6 +869,12 @@ int Launcher::run()
 		_device.destroySemaphore(_renderFinishedSemaphore[i]);
 		_device.destroyFence(_inFlightFences[i]);
 	}
+	_device.destroyDescriptorSetLayout(_descriptorSetLayout);
+	for (size_t i = 0; i < _uniformBuffers.size(); ++i) {
+		_device.destroyBuffer(_uniformBuffers[i]);
+		_device.freeMemory(_uniformBufferMemories[i]);
+	}
+	_device.destroyDescriptorPool(_descriptorPool);
 	_device.destroyBuffer(_vertexBuffer);
 	_device.freeMemory(_vertexBufferMemory);
 	_device.destroyBuffer(_indexBuffer);

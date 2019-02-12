@@ -57,6 +57,11 @@ private:
 	std::vector<uint16_t> _indices;
 	vk::Buffer _indexBuffer;
 	vk::DeviceMemory _indexBufferMemory;
+	std::vector<vk::Buffer> _uniformBuffers;
+	std::vector<vk::DeviceMemory> _uniformBufferMemories; 
+	vk::DescriptorSetLayout _descriptorSetLayout;
+	vk::DescriptorPool _descriptorPool;
+	std::vector<vk::DescriptorSet> _descriptorSets;
 
 	int initializeVulkan();
 	void recreateSwapchain();
@@ -84,4 +89,9 @@ private:
 	void createVertexBuffer();
 	void createIndexBuffer();
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+	void createDescriptorSetLayout();
+	void createUniformBuffers();
+	void updateUniformBuffer(uint32_t currentImage);
+	void createDescriptorPool();
+	void createDescriptorSets();
 };
