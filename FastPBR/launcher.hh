@@ -1,5 +1,7 @@
 #pragma once
 #include "geometry.hh"
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb\stb_image.h>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 #define GLM_FORCE_RADIANS
@@ -62,6 +64,8 @@ private:
 	vk::DescriptorSetLayout _descriptorSetLayout;
 	vk::DescriptorPool _descriptorPool;
 	std::vector<vk::DescriptorSet> _descriptorSets;
+	vk::Image _textureImage;
+	vk::DeviceMemory _textureImageMemory;
 
 	int initializeVulkan();
 	void recreateSwapchain();
@@ -94,4 +98,13 @@ private:
 	void updateUniformBuffer(uint32_t currentImage);
 	void createDescriptorPool();
 	void createDescriptorSets();
+	void loadImageToTexture();
+	void createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling imageTiling,
+		vk::ImageUsageFlags imageUsageFlags, vk::MemoryPropertyFlags memoryPropertyFlags, vk::Image& image,
+		vk::DeviceMemory& imageMemory);
+	vk::CommandBuffer beginSingleTimeCommands();
+	void endSingleTimeCommands(vk::CommandBuffer commandBuffer);
+	void transitionImageLayout(vk::Image image, vk::Format format, vk::ImageLayout oldLayout,
+		vk::ImageLayout newLayout);
+	void copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height);
 };

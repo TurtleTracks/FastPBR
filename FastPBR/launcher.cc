@@ -114,6 +114,7 @@ int Launcher::initializeVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
+	loadImageToTexture();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
@@ -590,8 +591,166 @@ void Launcher::createCommandBuffers() {
 
 		_commandBuffers[i].endRenderPass();
 		_commandBuffers[i].end();
-
 	}
+}
+
+vk::CommandBuffer Launcher::beginSingleTimeCommands() {
+	vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
+	commandBufferAllocateInfo.level = vk::CommandBufferLevel::ePrimary;
+	commandBufferAllocateInfo.commandPool = _commandPool;
+	commandBufferAllocateInfo.commandBufferCount = 1;
+
+	vk::CommandBuffer commandBuffer = _device.allocateCommandBuffers(commandBufferAllocateInfo)[0];
+
+	vk::CommandBufferBeginInfo commandBufferBeginInfo;
+	commandBufferBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+	commandBuffer.begin(commandBufferBeginInfo);
+
+	return commandBuffer;
+}
+
+void Launcher::endSingleTimeCommands(vk::CommandBuffer commandBuffer) {
+	commandBuffer.end();
+
+	vk::SubmitInfo submitInfo;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffer;
+
+	_graphicsQueue.submit(submitInfo, nullptr);
+	_graphicsQueue.waitIdle();
+
+	_device.freeCommandBuffers(_commandPool, commandBuffer);
+}
+
+void Launcher::loadImageToTexture() {
+	int textureWidth, textureHeight, textureChannels;
+	stbi_uc* pixels = stbi_load("textures/chicks.jpg", &textureWidth, &textureHeight, &textureChannels,
+		STBI_rgb_alpha);
+	vk::DeviceSize imageSize = textureWidth * textureHeight * 4;
+
+	if (!pixels) {
+		throw std::runtime_error("failed to load texture!");
+	}
+
+	vk::Buffer stagingBuffer;
+	vk::DeviceMemory stagingBufferMemory;
+
+	createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible
+		| vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+	void* data;
+	data = _device.mapMemory(stagingBufferMemory, 0, imageSize, {});
+	memcpy(data, pixels, imageSize);
+	_device.unmapMemory(stagingBufferMemory);
+
+	stbi_image_free(pixels);
+
+	vk::ImageUsageFlags imageUsageFlags = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+	vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+	vk::Format format = vk::Format::eR8G8B8A8Unorm;
+	vk::ImageTiling imageTiling = vk::ImageTiling::eOptimal;
+	
+	createImage(textureWidth, textureHeight, format, imageTiling, imageUsageFlags, memoryPropertyFlags,
+		_textureImage, _textureImageMemory);
+
+	transitionImageLayout(_textureImage, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+	copyBufferToImage(stagingBuffer, _textureImage, textureWidth, textureHeight);
+	transitionImageLayout(_textureImage, format, vk::ImageLayout::eTransferDstOptimal,
+		vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+void Launcher::createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling imageTiling,
+	vk::ImageUsageFlags imageUsageFlags, vk::MemoryPropertyFlags memoryPropertyFlags, vk::Image& image,
+	vk::DeviceMemory& imageMemory) {
+	// creating texture image object 
+	vk::ImageCreateInfo imageCreateInfo;
+	imageCreateInfo.imageType = vk::ImageType::e2D;
+	imageCreateInfo.extent.width = width;
+	imageCreateInfo.extent.height = height;
+	imageCreateInfo.extent.depth = 1;
+	imageCreateInfo.mipLevels = 1;
+	imageCreateInfo.arrayLayers = 1;
+	imageCreateInfo.format = format;
+	imageCreateInfo.tiling = imageTiling;
+	imageCreateInfo.initialLayout = vk::ImageLayout::eUndefined;
+	imageCreateInfo.usage = imageUsageFlags;
+	imageCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+	imageCreateInfo.samples = vk::SampleCountFlagBits::e1;
+
+	image = _device.createImage(imageCreateInfo);
+
+	vk::MemoryRequirements memoryRequirements = _device.getImageMemoryRequirements(image);
+
+	vk::MemoryAllocateInfo memoryAllocateInfo;
+	memoryAllocateInfo.allocationSize = memoryRequirements.size;
+	memoryAllocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
+		memoryPropertyFlags);
+	imageMemory = _device.allocateMemory(memoryAllocateInfo);
+
+	_device.bindImageMemory(image, imageMemory, 0);
+}
+
+void Launcher::transitionImageLayout(vk::Image image, vk::Format format, vk::ImageLayout oldLayout,
+	vk::ImageLayout newLayout) {
+	vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+
+	vk::ImageMemoryBarrier imageMemoryBarrier;
+	imageMemoryBarrier.oldLayout = oldLayout;
+	imageMemoryBarrier.newLayout = newLayout;
+	imageMemoryBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	imageMemoryBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	imageMemoryBarrier.image = image;
+	imageMemoryBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+	imageMemoryBarrier.subresourceRange.baseMipLevel = 0;
+	imageMemoryBarrier.subresourceRange.levelCount = 1;
+	imageMemoryBarrier.subresourceRange.baseArrayLayer = 0;
+	imageMemoryBarrier.subresourceRange.layerCount = 1;
+
+	vk::PipelineStageFlags sourceStage;
+	vk::PipelineStageFlags destinationStage;
+
+	if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+		imageMemoryBarrier.srcAccessMask = {};
+		imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+
+		sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+		destinationStage = vk::PipelineStageFlagBits::eTransfer;
+	} else if (oldLayout == vk::ImageLayout::eTransferDstOptimal 
+		&& newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+		imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+		sourceStage = vk::PipelineStageFlagBits::eTransfer;
+		destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+	} else {
+		throw std::invalid_argument("unsupported layout transition!");
+	}
+	
+	commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, nullptr, nullptr, imageMemoryBarrier);
+
+	endSingleTimeCommands(commandBuffer);
+}
+
+void Launcher::copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height) {
+	vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+
+	vk::BufferImageCopy region;
+	region.bufferOffset;
+	region.bufferRowLength;
+	region.bufferImageHeight;
+
+	region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+	region.imageSubresource.mipLevel = 0;
+	region.imageSubresource.baseArrayLayer = 0;
+	region.imageSubresource.layerCount = 1;
+
+	region.imageOffset = { 0, 0, 0 };
+	region.imageExtent = { width, height, 1 };
+	
+	commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+
+	endSingleTimeCommands(commandBuffer);
 }
 
 vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code) {
@@ -635,31 +794,13 @@ void Launcher::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk:
 }
 
 void Launcher::copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
-	vk::CommandBufferAllocateInfo bufferAllocateInfo;
-	bufferAllocateInfo.level = vk::CommandBufferLevel::ePrimary;
-	bufferAllocateInfo.commandPool = _commandPool;
-	bufferAllocateInfo.commandBufferCount = 1;
-
-	vk::CommandBuffer commandBuffer;
-	commandBuffer = _device.allocateCommandBuffers(bufferAllocateInfo)[0];
-
-	vk::CommandBufferBeginInfo bufferBeginInfo;
-	bufferBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
-	commandBuffer.begin(bufferBeginInfo);
+	vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
 
 	vk::BufferCopy copyRegion;
 	copyRegion.size = size;
 	commandBuffer.copyBuffer(srcBuffer, dstBuffer, copyRegion);
 
-	commandBuffer.end();
-
-	vk::SubmitInfo submitInfo;
-	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &commandBuffer;
-
-	_graphicsQueue.submit(submitInfo, nullptr);
-	_graphicsQueue.waitIdle();
-	_device.freeCommandBuffers(_commandPool, commandBuffer);
+	endSingleTimeCommands(commandBuffer);
 }
 
 void Launcher::createVertexBuffer() {
@@ -748,7 +889,7 @@ void Launcher::updateUniformBuffer(uint32_t currentImage) {
 							0.0f, 0.0f, 0.5f, 0.0f,
 							0.0f, 0.0f, 0.5f, 1.0f);
 	ubo.model = glm::rotate(glm::mat4(1.0f), time  * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	ubo.view = glm::lookAt(glm::vec3(0, 0, -2), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+	ubo.view = glm::lookAt(glm::vec3(0, 0, 2), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
 	ubo.proj = glm::perspective(glm::radians(45.0f), _swapchainExtent.width / (float)_swapchainExtent.height, 0.1f, 10.0f);
 
 	void* data;
