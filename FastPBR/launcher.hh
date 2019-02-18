@@ -65,6 +65,8 @@ private:
 	vk::DescriptorPool _descriptorPool;
 	std::vector<vk::DescriptorSet> _descriptorSets;
 	vk::Image _textureImage;
+	vk::ImageView _textureImageView;
+	vk::Sampler _textureSampler;
 	vk::DeviceMemory _textureImageMemory;
 
 	int initializeVulkan();
@@ -98,7 +100,7 @@ private:
 	void updateUniformBuffer(uint32_t currentImage);
 	void createDescriptorPool();
 	void createDescriptorSets();
-	void loadImageToTexture();
+	void loadToTextureImage();
 	void createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling imageTiling,
 		vk::ImageUsageFlags imageUsageFlags, vk::MemoryPropertyFlags memoryPropertyFlags, vk::Image& image,
 		vk::DeviceMemory& imageMemory);
@@ -107,4 +109,6 @@ private:
 	void transitionImageLayout(vk::Image image, vk::Format format, vk::ImageLayout oldLayout,
 		vk::ImageLayout newLayout);
 	void copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height);
+	void createTextureImageView();
+	void createTextureSampler();
 };

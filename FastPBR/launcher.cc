@@ -92,6 +92,7 @@ int Launcher::initializeVulkan() {
 	queueCreateInfo[1].queueCount = 1;
 	queueCreateInfo[1].pQueuePriorities = &queuePriority;
 	vk::PhysicalDeviceFeatures deviceFeatures = {};
+	deviceFeatures.samplerAnisotropy = true;
 
 	vk::DeviceCreateInfo deviceCreateInfo = {};
 	deviceCreateInfo.pQueueCreateInfos = queueCreateInfo.data();
@@ -114,7 +115,9 @@ int Launcher::initializeVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
-	loadImageToTexture();
+	loadToTextureImage();
+	createTextureImageView();
+	createTextureSampler();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
@@ -150,6 +153,7 @@ vk::PhysicalDevice Launcher::pickPhysicalDevice(std::vector<vk::PhysicalDevice> 
 		// if device is suitable, return 
 		auto deviceProperties = device.getProperties();
 		if (deviceProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+			auto features = device.getFeatures();
 			// check if right queue families or whatever
 			uint32_t i = 0;
 			auto familyProperties = device.getQueueFamilyProperties();
@@ -168,7 +172,7 @@ vk::PhysicalDevice Launcher::pickPhysicalDevice(std::vector<vk::PhysicalDevice> 
 						foundPresentFamily = true;
 					}
 					if (foundGraphicsFamily && foundPresentFamily 
-						&& deviceSupportsExtensions(device)) {
+						&& deviceSupportsExtensions(device) && features.samplerAnisotropy) {
 						return device;
 					}
 					i++;
@@ -311,11 +315,18 @@ void Launcher::createDescriptorSetLayout() {
 	uboLayoutBinding.descriptorCount = 1;
 	uboLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
 
-	vk::PipelineLayout pipelineLayout; 
+	vk::DescriptorSetLayoutBinding samplerLayoutBinding;
+	samplerLayoutBinding.binding = 1;
+	samplerLayoutBinding.descriptorCount = 1;
+	samplerLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+	samplerLayoutBinding.pImmutableSamplers = nullptr;
+	samplerLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+	std::array<vk::DescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
 
 	vk::DescriptorSetLayoutCreateInfo layoutCreateInfo;
-	layoutCreateInfo.bindingCount = 1;
-	layoutCreateInfo.pBindings = &uboLayoutBinding;
+	layoutCreateInfo.bindingCount = bindings.size();
+	layoutCreateInfo.pBindings = bindings.data();
 
 	_descriptorSetLayout = _device.createDescriptorSetLayout(layoutCreateInfo);
 }
@@ -336,24 +347,40 @@ void Launcher::createDescriptorSets() {
 		bufferInfo.offset = 0; 
 		bufferInfo.range = sizeof(UniformBufferObject);
 
-		vk::WriteDescriptorSet descriptorWrite = {};
-		descriptorWrite.dstSet = _descriptorSets[i];
-		descriptorWrite.dstBinding = 0;
-		descriptorWrite.dstArrayElement = 0;
-		descriptorWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.pBufferInfo = &bufferInfo;
-		_device.updateDescriptorSets(descriptorWrite, nullptr);
+		vk::DescriptorImageInfo descriptorImageInfo;
+		descriptorImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		descriptorImageInfo.imageView = _textureImageView;
+		descriptorImageInfo.sampler = _textureSampler;
+
+		std::array<vk::WriteDescriptorSet, 2> descriptorWrites = {};
+		descriptorWrites[0].dstSet = _descriptorSets[i];
+		descriptorWrites[0].dstBinding = 0;
+		descriptorWrites[0].dstArrayElement = 0;
+		descriptorWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+		descriptorWrites[0].descriptorCount = 1;
+		descriptorWrites[0].pBufferInfo = &bufferInfo;
+
+		descriptorWrites[1].dstSet = _descriptorSets[i];
+		descriptorWrites[1].dstBinding = 1;
+		descriptorWrites[1].dstArrayElement = 0;
+		descriptorWrites[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+		descriptorWrites[1].descriptorCount = 1;
+		descriptorWrites[1].pImageInfo = &descriptorImageInfo;
+
+		_device.updateDescriptorSets(descriptorWrites, nullptr);
 	}
 }
 
 void Launcher::createDescriptorPool() {
-	vk::DescriptorPoolSize poolSize;
-	poolSize.descriptorCount = _swapchainImages.size();
+	std::array<vk::DescriptorPoolSize, 2> poolSizes;
+	poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
+	poolSizes[0].descriptorCount = _swapchainImages.size();
+	poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
+	poolSizes[1].descriptorCount = _swapchainImages.size();
 
 	vk::DescriptorPoolCreateInfo poolCreateInfo;
-	poolCreateInfo.poolSizeCount = 1;
-	poolCreateInfo.pPoolSizes = &poolSize;
+	poolCreateInfo.poolSizeCount = poolSizes.size();;
+	poolCreateInfo.pPoolSizes = poolSizes.data();
 	poolCreateInfo.maxSets = _swapchainImages.size();
 
 	_descriptorPool = _device.createDescriptorPool(poolCreateInfo);
@@ -623,7 +650,7 @@ void Launcher::endSingleTimeCommands(vk::CommandBuffer commandBuffer) {
 	_device.freeCommandBuffers(_commandPool, commandBuffer);
 }
 
-void Launcher::loadImageToTexture() {
+void Launcher::loadToTextureImage() {
 	int textureWidth, textureHeight, textureChannels;
 	stbi_uc* pixels = stbi_load("textures/chicks.jpg", &textureWidth, &textureHeight, &textureChannels,
 		STBI_rgb_alpha);
@@ -753,6 +780,45 @@ void Launcher::copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t wi
 	endSingleTimeCommands(commandBuffer);
 }
 
+void Launcher::createTextureImageView() {
+	vk::ImageViewCreateInfo viewInfo;
+	viewInfo.image = _textureImage;
+	viewInfo.viewType = vk::ImageViewType::e2D;
+	viewInfo.format = vk::Format::eR8G8B8A8Unorm;
+	viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = 1;
+	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.layerCount = 1;
+
+	_textureImageView = _device.createImageView(viewInfo);
+}
+
+void Launcher::createTextureSampler() {
+	vk::SamplerCreateInfo samplerCreateInfo;
+	samplerCreateInfo.magFilter = vk::Filter::eLinear;
+	samplerCreateInfo.minFilter = vk::Filter::eLinear;
+
+	samplerCreateInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
+	samplerCreateInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
+	samplerCreateInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+
+	samplerCreateInfo.anisotropyEnable = true;
+	samplerCreateInfo.maxAnisotropy = 16;
+
+	samplerCreateInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
+	samplerCreateInfo.unnormalizedCoordinates = false;
+	samplerCreateInfo.compareEnable = false;
+	samplerCreateInfo.compareOp = vk::CompareOp::eAlways;
+
+	samplerCreateInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+	samplerCreateInfo.mipLodBias = 0;
+	samplerCreateInfo.minLod = 0;
+	samplerCreateInfo.maxLod = 0;
+
+	_textureSampler = _device.createSampler(samplerCreateInfo);
+}
+
 vk::ShaderModule Launcher::createShaderModule(const std::vector<char>& code) {
 	vk::ShaderModuleCreateInfo createInfo;
 
@@ -806,10 +872,10 @@ void Launcher::copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::Device
 void Launcher::createVertexBuffer() {
 	_vertices = 
 	{ 
-		{ {-0.5f, -0.5f, 0 }, { 1.0, 0.0f, 0.0f } },
-		{ { 0.5f, -0.5f, 0 }, { 1.0f, 1.0f, 0.0f } },
-		{ { 0.5f, 0.5f, 0 }, { 0.0f, 0.0f, 1.0f } },
-		{ { -0.5f, 0.5f, 0 }, { 1.0f, 1.0f, 1.0f } }
+		{ {-0.5f, -0.5f, 0 }, { 1.0, 0.0f, 0.0f }, {1.0f, 0.0f} },
+		{ { 0.5f, -0.5f, 0 }, { 1.0f, 1.0f, 0.0f }, {0.0f, 0.0f} },
+		{ { 0.5f, 0.5f, 0 }, { 0.0f, 0.0f, 1.0f }, {0.0, 1.0f} },
+		{ { -0.5f, 0.5f, 0 }, { 1.0f, 1.0f, 1.0f }, {1.0f, 1.0f} }
 	};
 	vk::DeviceSize bufferSize = sizeof(_vertices[0]) * _vertices.size();
 	auto properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -1015,6 +1081,9 @@ int Launcher::run()
 		_device.destroyBuffer(_uniformBuffers[i]);
 		_device.freeMemory(_uniformBufferMemories[i]);
 	}
+	_device.destroyImageView(_textureImageView);
+	_device.destroySampler(_textureSampler);
+	_device.destroyImage(_textureImage);
 	_device.destroyDescriptorPool(_descriptorPool);
 	_device.destroyBuffer(_vertexBuffer);
 	_device.freeMemory(_vertexBufferMemory);
